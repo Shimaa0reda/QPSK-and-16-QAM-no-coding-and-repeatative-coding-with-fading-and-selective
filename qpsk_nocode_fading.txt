@@ -1,0 +1,204 @@
+
+clear;
+clc;
+close all;
+
+numberOfsymbol =500;
+bits_per_symbol=128;
+numberOfBits = bits_per_symbol*numberOfsymbol;
+
+%Define Noise%
+MINIMUM_SNR = -20;
+MAXIMAUM_SNR = 10;
+variance_h = sqrt(0.5);
+
+% Define SNR%
+SNR = MINIMUM_SNR:MAXIMAUM_SNR;
+error = zeros(1, length(SNR));
+BER_ofdm_qpsk_no_code_fadding_more_symbol = zeros(1, length(SNR));
+
+%Bit Energy QPSk%
+Eb_QPSK = ((1 + 1) * 4) / 4/2;
+
+%Define No%
+N0_QPSK = Eb_QPSK .* 10 .^ (- .1 .* SNR);
+
+
+% Generating random binary stream %
+my_data=randi([0 1], 1, numberOfBits);
+
+%channel response generation
+h_r =  (variance_h) * randn(1, 80);
+h_i =  (variance_h) * randn(1, 80);
+h_QPSK = h_r + h_i * 1i;
+
+
+
+for n = 1:MAXIMAUM_SNR-MINIMUM_SNR
+    temp=[];
+    for q=1:bits_per_symbol
+
+
+        %Define Data Burst%
+        data=my_data(bits_per_symbol*(q-1)+1:bits_per_symbol*q);
+        % Interleaver %
+        interleaver_output = Interleaver_Block(data,8,16);
+        % End of Interleaver %
+
+
+        %Mapper %
+        [QPSK_Mapper_output] =QPSK_Mapper(interleaver_output,bits_per_symbol);
+        %% End of Mapper %
+
+
+        % 64-point IFFT %
+        IFFT_block_output = ifft(QPSK_Mapper_output , 64);
+        %  End of 64-point IFFT %
+        % Cyclic Extension %
+        Mapper_output_length= length(QPSK_Mapper_output);
+
+        Cyclic_Extension_Output = [IFFT_block_output((3*Mapper_output_length/4+1):Mapper_output_length) IFFT_block_output];
+
+        % End of Cyclic Extension %
+
+        %%%%%%%%%%%%%%%%%%% fading channel %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        %remove cyclic effect
+        length_1=length(Cyclic_Extension_Output);
+        yk_hat_2=Cyclic_Extension_Output((length_1/5)+1 : length_1);
+
+        %apply fft
+        yk_hat_2 = fft(yk_hat_2);
+
+        %apply channel effect
+        [data_AfterChannel, h_QPSK] = ADDING_H_AND_AWGN(yk_hat_2, N0_QPSK(n),0,h_QPSK(1:length(yk_hat_2)));
+
+        %re-apply ifft
+        IFFT_block_output = ifft(data_AfterChannel , 64);
+
+        %re-apply cyclic extension
+        IFFT_block_output_length= length(IFFT_block_output);
+        Cyclic_Extension_Output = [IFFT_block_output((3*IFFT_block_output_length/4+1):IFFT_block_output_length) IFFT_block_output];
+
+
+        %%%%%%%%%%%%%%%% end of fading channel %%%%%%%%%%%%%%%%%%%
+
+        %%%%%%%%%%%%%%%%% receiver %%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+        % Remove cyclic extension
+        Data_Length=length(Cyclic_Extension_Output);
+        Decycled_data= Cyclic_Extension_Output((Data_Length/5)+1 : Data_Length);
+
+        % FFT
+        Decycled_data = fft(Decycled_data);
+        %Remove the channel effect
+        Data_After_removing_Channel_effect=Decycled_data ./ h_QPSK(1:length(Decycled_data));
+
+        % QPSK Demapper
+        [QPSK_Demapped_Data] = QPSK_Demapper(Data_After_removing_Channel_effect);
+
+        % remove interlever effect
+        DeInterleaver_Data = Interleaver_Block(QPSK_Demapped_Data,16,8);
+        temp=[temp DeInterleaver_Data];
+    end
+    DeInterleaver_Data=temp;
+
+    %%%%%%%%%%%%%%% End of receiver %%%%%%%%%%%%%%%%%%%%%5
+
+
+    %%%%%%%%%%%%%%%%%%%%%%%%%BER calculate %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    error = sum(my_data(1:length(DeInterleaver_Data)) ~= DeInterleaver_Data);
+    BER_ofdm_qpsk_no_code_fadding_more_symbol(n) = error / length(DeInterleaver_Data);
+
+end
+
+
+semilogy(MINIMUM_SNR:MAXIMAUM_SNR,BER_ofdm_qpsk_no_code_fadding_more_symbol);
+xlabel ('Eb/No(dB)');
+ylabel('BER');
+grid on
+title('BER vs Eb/No QPSK with no repetition');
+
+
+
+
+% interleaver function
+
+function [interleaver_Data] =Interleaver_Block(Data,rows,coloumns)
+interleaver_Data = [];
+Intrlv_Size = rows * coloumns;
+No_of_bits = length(Data);
+for i = 1:No_of_bits/Intrlv_Size
+    interleaver_Data =horzcat(interleaver_Data,matintrlv(Data((i-1)*Intrlv_Size+1:i*Intrlv_Size),rows,coloumns));
+end
+end
+
+function [QPSK_Demapped_Data] = QPSK_Demapper(Decycled_data)
+Received_data = Decycled_data;
+size_of_sig = length(Received_data);
+QPSK_Demapped_Data = zeros(1,size_of_sig*2);
+l = 1;
+% Receiver decisions %
+% Since symbols are equiprobable %
+% Decision regions are a quadrant for every symbol %
+for v = 1:size_of_sig %32
+    if real(Received_data(v)) <= 0 && imag(Received_data(v)) <= 0
+        QPSK_Demapped_Data(l) = 0;
+        QPSK_Demapped_Data(l+1) = 0;
+    elseif real(Received_data(v)) <= 0 && imag(Received_data(v)) >= 0
+        QPSK_Demapped_Data(l) = 0;
+        QPSK_Demapped_Data(l+1) = 1;
+    elseif real(Received_data(v)) >= 0 && imag(Received_data(v)) <= 0
+        QPSK_Demapped_Data(l) = 1;
+        QPSK_Demapped_Data(l+1) = 0;
+    elseif real(Received_data(v)) >= 0 && imag(Received_data(v)) >= 0
+        QPSK_Demapped_Data(l) = 1;
+        QPSK_Demapped_Data(l+1) = 1;
+    end
+    l = l + 2;
+end
+end
+
+function [QPSK_Mapper_output] =QPSK_Mapper(interleaver_output,bits_per_symbol)
+k = 1;
+QPSK_Symbols = [ -1-1i -1+1i 1-1i 1+1i ];
+% Mapping to symbols%
+% Mapping 00 to -1-i %
+% Mapping 01 to -1+i %
+% Mapping 10 to 1-i %
+% Mapping 11 to 1+i %
+QPSK_Mapper_output = zeros(1, bits_per_symbol / 2);
+for g = 1:bits_per_symbol / 2
+    which_Symbol = (interleaver_output(k)*2+interleaver_output(k+1))+1;
+    QPSK_Mapper_output(g) = QPSK_Symbols(which_Symbol);
+    k =k+2;
+end
+end
+
+
+
+
+
+
+
+
+
+
+
+
+%ADDING channel effect and AWGN NOISE TO SIGNAL
+function [ADDING_H_AND_AWGN_VAL, h] = ADDING_H_AND_AWGN(signal, variance_val_n, mean_val_n,h)
+noise_real = (variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n;
+noise_img = ((variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n) * 1i;
+ADDING_H_AND_AWGN_VAL = h .* signal + (noise_real + noise_img);
+end
+
+
+
+
+
+
+

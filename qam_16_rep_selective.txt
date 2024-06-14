@@ -1,0 +1,284 @@
+clear;
+clc;
+close all;
+
+numberOfsymbol =1550;
+rep=3;
+bits_ber_symbol=256;
+%bits_per_symbol_before_rep=bits_ber_symbol/rep;
+bits_per_symbol_before_rep=84;
+bits_per_symbol_after_rep=84*3;
+padding =bits_ber_symbol-bits_per_symbol_after_rep;
+
+
+numberOfBits = bits_per_symbol_before_rep*numberOfsymbol;
+MINIMUM_SNR = -20;
+MAXIMAUM_SNR = 10;
+variance_h = 0.5;
+
+SNR = MINIMUM_SNR:MAXIMAUM_SNR;
+error = zeros(1, length(SNR));
+BER_ofdm_qpsk_no_code_fadding_more_symbol = zeros(1, length(SNR));
+Eb_QPSK = 1/3*((1 + 1) * 4) / 4/2;
+N0_QPSK = Eb_QPSK .* 10 .^ (- .1 .* SNR);
+
+
+ % Generating random binary stream %
+ my_data=randi([0 1], 1, numberOfBits); 
+ 
+ 
+
+ 
+ 
+ 
+    for n = 1:MAXIMAUM_SNR-MINIMUM_SNR
+ temp=[];
+ for q=1:numberOfsymbol
+    
+          data_before_padding=my_data((bits_per_symbol_before_rep*(q-1)+1):bits_per_symbol_before_rep*q);
+           bk_rep = repelem(data_before_padding,rep);
+          data_after_padding=[bk_rep zeros(1,padding)];
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Interleaver%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+     interleaver_output = Interleaver_Block( data_after_padding,16,16);
+     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%End of Interleaver%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+     %%%%%%%%%%%%%%%%%% Mapper %%%%%%%%%%%%%%%%%%%%
+        Mapper_output = mod16(interleaver_output,1);
+
+        %%%%%%%%%%%%%%%%%% End of Mapper %%%%%%%%%%%%%%%%%%%%
+  
+        
+        %%%%%%%%%%%%%%%%%% 64-point IFFT %%%%%%%%%%%%%%%%%%%%
+    IFFT_block_output = ifft(Mapper_output , 64);
+     %%%%%%%%%%%%%%  End of 64-point IFFT %%%%%%%%%%%%%%%%%%%%
+
+     %%%%%%%%%%%%%%%%%% Cyclic Extension %%%%%%%%%%%%%%%%%%%%
+ Mapper_output_length= length(Mapper_output);
+
+Cyclic_Extension_Output = [IFFT_block_output((3*Mapper_output_length/4+1):Mapper_output_length) IFFT_block_output]; 
+
+     %%%%%%%%%%%%%%%End of Cyclic Extension %%%%%%%%%%%%%%%%%%%%
+
+  %%%%%%%%%%%%%%%%%%% fading channel %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  cyclic_entension_size = length(Cyclic_Extension_Output);
+%     %generate real and imaginary parts of a channel impulse
+%     % response with random Gaussian elements.
+%     hr = normrnd(0,variance_h,1,cyclic_entension_size);
+%     hi = 1j*normrnd(0,variance_h,1,cyclic_entension_size);
+%     h= hr + hi;
+% 
+%     %calculates a linear signal-to-noise ratio based on the given Eb_No_2
+%     %Eb_No_lin = 10.^(0.1*Eb_No_2);
+% 
+%     %generate real and imaginary parts of complex Gaussian noise.
+%     nc = normrnd(0,N0_QPSK(n),1,cyclic_entension_size);
+%     ns = 1j*normrnd(0,N0_QPSK(n),1,cyclic_entension_size);
+% 
+%     %adds the noise to the signal
+%     Cyclic_Extension_Output = Cyclic_Extension_Output + nc + ns ;
+% 
+%     %transform both the signal and channel impulse response
+%     % into the frequency domain using FFT.
+%     Cyclic_Extension_Output = fft(Cyclic_Extension_Output);
+%     h = fft(h);
+%     %performs element-wise multiplication in the frequency
+%     % domain, simulating channel convolution.
+%     yk = Cyclic_Extension_Output .* h;
+%     channel_output = ifft(yk);
+[data_AfterChannel, h_QPSK] = ADDING_H_AND_AWGN(Cyclic_Extension_Output , N0_QPSK(n), 0, variance_h, 0);
+    %%%%%%%%%%%%%%%% end of fading channel %%%%%%%%%%%%%%%%%%%
+    
+        %%%%%%%%%%%%%%%%% receiver %%%%%%%%%%%%%%%%%%%%%%%
+
+ %%%%%%%%%%%%%%%%%%%%%% compensting  data after receiving   %%%%%%%%%%%%%%%%%%%%%%%%%
+ 
+  %remove the channel effect
+data_compensate= data_AfterChannel ./ h_QPSK;
+
+ % removing cyclic extension
+ length_1=length(data_compensate);
+yk_hat_2= data_compensate((length_1/5)+1 : length_1);
+
+     % remove ifft
+yk_hat_2 = fft(yk_hat_2);
+
+% remove mapper
+   bk_hat=demod16(yk_hat_2,1);
+    
+    % remove interlever
+ de_interleaver = Interleaver_Block(bk_hat,16,16);
+ 
+ %%%% remove padding 
+ de_interleaver_without_pading=de_interleaver(1:length(de_interleaver)-4);
+ length_3=length( de_interleaver_without_pading);
+ 
+ %%%%%%%%%%%% decoding %%%%%%%%%%%%%%%%%%
+decoded_bits = zeros(1, length(de_interleaver_without_pading) / 3);
+
+for i = 1:3:length(de_interleaver_without_pading)
+    segment = de_interleaver_without_pading(i:i+2);
+    decoded_bits((i+2)/3) = mode(segment); % Taking the majority vote
+end
+temp=[temp decoded_bits];
+ end
+  Decoded_data=temp;
+  
+  %%%%%%%%%%%%%%% End of receiver %%%%%%%%%%%%%%%%%%%%%5
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%BER calculate %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ error = sum(my_data(1:length(Decoded_data)) ~= Decoded_data);
+BER_ofdm_qpsk_no_code_fadding_more_symbol(n) = error / length(Decoded_data);
+    end 
+    
+    
+    semilogy(MINIMUM_SNR:MAXIMAUM_SNR,BER_ofdm_qpsk_no_code_fadding_more_symbol);
+
+ % interleaver function
+
+function [interleaver_Data] =Interleaver_Block(Data,rows,coloumns)
+ interleaver_Data = [];
+ Intrlv_Size = rows * coloumns;
+ No_of_bits = length(Data);
+ for i = 1:No_of_bits/Intrlv_Size
+ interleaver_Data =horzcat(interleaver_Data,matintrlv(Data((i-1)*Intrlv_Size+1:i*Intrlv_Size),rows,coloumns));
+ end
+end
+
+
+
+
+
+
+
+
+function[QAM_16_Data]=mod16(Data,A)
+No_of_bits=length(Data);
+padding=4-mod(No_of_bits,4);
+if padding~=4
+    Data(end+1:end+padding)=0;
+end
+
+QAM_16_Data=zeros(1,No_of_bits/4);
+
+k = 1;
+for B = 1 : 4 : No_of_bits
+    % 0000 mapped to -3-3i
+    if(Data(B) == 0 && Data(B+1) == 0 && Data(B+2)== 0 && Data(B+3)==0)%0000
+        QAM_16_Data(1,k) = -3*A-A*3i;
+        % 0110 mapped to -1+3i
+    elseif(Data(B) ==0 && Data(B+1) == 1&& Data(B+2)==1 && Data(B+3)==0)%0110
+        QAM_16_Data(1,k) = -A+3*A*1i;
+    % 0101 mapped to -1-1i
+    elseif(Data(B) ==0 && Data(B+1) == 1&& Data(B+2)==0 && Data(B+3)==1)%0101
+        QAM_16_Data(1,k) = -A-A*1i;
+    % 0001 mapped to -3-1i
+    elseif(Data(B) ==0 && Data(B+1) == 0&& Data(B+2)==0 && Data(B+3)==1)%0001
+        QAM_16_Data(1,k) = -3*A-A*1i;
+    % 1000 mapped to 3-3i
+    elseif(Data(B) ==1 && Data(B+1) == 0&& Data(B+2)==0 && Data(B+3)==0)%1000
+        QAM_16_Data(1,k) =3*A-3*A*1i;
+    % 1011 mapped to 3+1i
+    elseif(Data(B) ==1 && Data(B+1) == 0&& Data(B+2)==1 && Data(B+3)==1)%1011
+        QAM_16_Data(1,k) =3*A+A*1i;
+    % 1110 mapped to A+3*A*1i
+    elseif(Data(B) ==1 && Data(B+1) == 1&& Data(B+2)==1 && Data(B+3)==0)%1110
+        QAM_16_Data(1,k) = A+3*A*1i;
+    % 0111 mapped to -1+1i
+    elseif(Data(B) ==0 && Data(B+1) == 1&& Data(B+2)==1 && Data(B+3)==1)%0111
+        QAM_16_Data(1,k) = -A+A*1i;
+    % 1010 mapped to 3+3i
+    elseif(Data(B) ==1 && Data(B+1) == 0&& Data(B+2)==1 && Data(B+3)==0)%1010
+        QAM_16_Data(1,k) = 3*A+3*A*1i;
+    % 1100 mapped to 1-3i
+    elseif(Data(B) ==1 && Data(B+1) == 1&& Data(B+2)==0 && Data(B+3)==0)%1100
+        QAM_16_Data(1,k) =A-3*A*1i;
+    % 1101 mapped to 1-1i
+    elseif(Data(B) ==1 && Data(B+1) == 1&& Data(B+2)==0 && Data(B+3)==1)%1101
+        QAM_16_Data(1,k) = A-A*1i;
+    % 1111 mapped to 1+1i
+    elseif(Data(B) ==1 && Data(B+1) == 1&& Data(B+2)==1 && Data(B+3)==1)%1111
+        QAM_16_Data(1,k) =A+A*1i;
+    % 0010 mapped to -3+3i
+    elseif(Data(B) ==0 && Data(B+1) == 0&& Data(B+2)==1 && Data(B+3)==0)%0010
+        QAM_16_Data(1,k) = -3*A+A*3*1i;
+    % 1001 mapped to 3-1i
+    elseif(Data(B) ==1 && Data(B+1) == 0&& Data(B+2)==0 && Data(B+3)==1)%1001
+        QAM_16_Data(1,k) =3*A-A*1i;
+    % 0100 mapped to -1-3i
+    elseif(Data(B) ==0 && Data(B+1) == 1&& Data(B+2)==0 && Data(B+3)==0)%0100
+        QAM_16_Data(1,k) = -1*A-A*3*1i;
+    % 0011 mapped to -3+1i
+    else %0011
+        QAM_16_Data(1,k) = -3*A+A*1i;
+    end
+    k = k + 1;
+end
+
+end
+
+function[Output_Signal_QAM_16]=demod16(Output_Signal_QAM_16_Noise,A)
+ L=length(Output_Signal_QAM_16_Noise);
+ Output_Signal_QAM_16=zeros(1,4*L);
+QAM_16_Counter = 1;
+ 
+ for j=1:L
+     if (real(Output_Signal_QAM_16_Noise(1,j)) >= 0 && imag(Output_Signal_QAM_16_Noise(1,j))>=0) % ---- first quadarture ---- %
+         if (real(Output_Signal_QAM_16_Noise(1,j)) >=2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=1; Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))>=2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))<=2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         else
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         end
+     elseif(real(Output_Signal_QAM_16_Noise(1,j))<=0 && imag(Output_Signal_QAM_16_Noise(1,j))>=0) % ---- Second quadarture ---- %
+         if(real(Output_Signal_QAM_16_Noise(1,j))<=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=1; Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))<=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))>=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         else
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=1;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         end
+     elseif(real(Output_Signal_QAM_16_Noise(1,j))<=0 && imag(Output_Signal_QAM_16_Noise(1,j))<=0)% ---- Third quadarture ---- %
+         if(real(Output_Signal_QAM_16_Noise(1,j))<=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=0; Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))<=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))>=-2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         else
+             Output_Signal_QAM_16(1,QAM_16_Counter)=0; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         end
+     else % ---- Fourth quadarture ---- %
+         if(real(Output_Signal_QAM_16_Noise(1,j))>=2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=0; Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))>=2*A && imag(Output_Signal_QAM_16_Noise(1,j))>=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=0; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         elseif(real(Output_Signal_QAM_16_Noise(1,j))<=2*A && imag(Output_Signal_QAM_16_Noise(1,j))<=-2*A)
+             Output_Signal_QAM_16(1,QAM_16_Counter)=1; Output_Signal_QAM_16(1,QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=0;
+         else
+             Output_Signal_QAM_16(QAM_16_Counter)=1; Output_Signal_QAM_16(QAM_16_Counter+1)=1; Output_Signal_QAM_16(QAM_16_Counter+2)=0;Output_Signal_QAM_16(QAM_16_Counter+3)=1;
+         end
+     end
+     QAM_16_Counter = QAM_16_Counter + 4;
+ end
+end
+  
+
+
+        
+
+
+%ADDING channel effect and AWGN NOISE TO SIGNAL
+function [ADDING_H_AND_AWGN_VAL, h] = ADDING_H_AND_AWGN(signal, variance_val_n, mean_val_n, variance_val_h, mean_val_h)
+    h_r = mean_val_h + (variance_val_h) * randn(1, length(signal));
+    h_i = mean_val_h + (variance_val_h) * randn(1, length(signal));
+    h = h_r + h_i * 1i;
+    noise_real = (variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n;
+    noise_img = ((variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n) * 1i;
+    ADDING_H_AND_AWGN_VAL = h .* signal + (noise_real + noise_img);
+end

@@ -1,0 +1,212 @@
+
+clc;
+close all;
+
+numberOfsymbol =1550;
+rep=3;
+bits_ber_symbol=128;
+%bits_per_symbol_before_rep=bits_ber_symbol/rep;
+bits_per_symbol_before_rep=42;
+bits_per_symbol_after_rep=42*3;
+padding =bits_ber_symbol-bits_per_symbol_after_rep;
+
+
+numberOfBits = bits_per_symbol_before_rep*numberOfsymbol;
+MINIMUM_SNR = -20;
+MAXIMAUM_SNR = 10;
+variance_h = 0.5;
+
+SNR = MINIMUM_SNR:MAXIMAUM_SNR;
+error = zeros(1, length(SNR));
+BER_ofdm_qpsk_no_code_fadding_more_symbol = zeros(1, length(SNR));
+Eb_QPSK = 1/3*((1 + 1) * 4) / 4/2;
+N0_QPSK = Eb_QPSK .* 10 .^ (- .1 .* SNR);
+
+
+ % Generating random binary stream %
+ my_data=randi([0 1], 1, numberOfBits); 
+ 
+ 
+
+ 
+ 
+ 
+    for n = 1:MAXIMAUM_SNR-MINIMUM_SNR
+ temp=[];
+ for q=1:numberOfsymbol
+    
+          data_before_padding=my_data((bits_per_symbol_before_rep*(q-1)+1):bits_per_symbol_before_rep*q);
+           bk_rep = repelem(data_before_padding,rep);
+          data_after_padding=[bk_rep zeros(1,padding)];
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%Interleaver%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+     interleaver_output = Interleaver_Block( data_after_padding,8,16);
+     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%End of Interleaver%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+     %%%%%%%%%%%%%%%%%% Mapper %%%%%%%%%%%%%%%%%%%%
+k = 1;
+    QPSK_Symbols = [ -1-1i -1+1i 1-1i 1+1i ];
+    Mapper_output = zeros(1, bits_ber_symbol / 2);
+    for g = 1:bits_ber_symbol / 2
+        which_Symbol = (interleaver_output(k)*2+interleaver_output(k+1))+1;
+        Mapper_output(g) = QPSK_Symbols(which_Symbol);
+        k =k+2;
+    end
+        %%%%%%%%%%%%%%%%%% End of Mapper %%%%%%%%%%%%%%%%%%%%
+  
+        
+        %%%%%%%%%%%%%%%%%% 64-point IFFT %%%%%%%%%%%%%%%%%%%%
+    IFFT_block_output = ifft(Mapper_output , 64);
+     %%%%%%%%%%%%%%  End of 64-point IFFT %%%%%%%%%%%%%%%%%%%%
+
+     %%%%%%%%%%%%%%%%%% Cyclic Extension %%%%%%%%%%%%%%%%%%%%
+ Mapper_output_length= length(Mapper_output);
+
+Cyclic_Extension_Output = [IFFT_block_output((3*Mapper_output_length/4+1):Mapper_output_length) IFFT_block_output]; 
+
+     %%%%%%%%%%%%%%%End of Cyclic Extension %%%%%%%%%%%%%%%%%%%%
+
+  %%%%%%%%%%%%%%%%%%% fading channel %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  cyclic_entension_size = length(Cyclic_Extension_Output);
+%     %generate real and imaginary parts of a channel impulse
+%     % response with random Gaussian elements.
+%     hr = normrnd(0,variance_h,1,cyclic_entension_size);
+%     hi = 1j*normrnd(0,variance_h,1,cyclic_entension_size);
+%     h= hr + hi;
+% 
+%     %calculates a linear signal-to-noise ratio based on the given Eb_No_2
+%     %Eb_No_lin = 10.^(0.1*Eb_No_2);
+% 
+%     %generate real and imaginary parts of complex Gaussian noise.
+%     nc = normrnd(0,N0_QPSK(n),1,cyclic_entension_size);
+%     ns = 1j*normrnd(0,N0_QPSK(n),1,cyclic_entension_size);
+% 
+%     %adds the noise to the signal
+%     Cyclic_Extension_Output = Cyclic_Extension_Output + nc + ns ;
+% 
+%     %transform both the signal and channel impulse response
+%     % into the frequency domain using FFT.
+%     Cyclic_Extension_Output = fft(Cyclic_Extension_Output);
+%     h = fft(h);
+%     %performs element-wise multiplication in the frequency
+%     % domain, simulating channel convolution.
+%     yk = Cyclic_Extension_Output .* h;
+%     channel_output = ifft(yk);
+[data_AfterChannel, h_QPSK] = ADDING_H_AND_AWGN(Cyclic_Extension_Output , N0_QPSK(n), 0, variance_h, 0);
+    %%%%%%%%%%%%%%%% end of fading channel %%%%%%%%%%%%%%%%%%%
+    
+        %%%%%%%%%%%%%%%%% receiver %%%%%%%%%%%%%%%%%%%%%%%
+
+ %%%%%%%%%%%%%%%%%%%%%% compensting  data after receiving   %%%%%%%%%%%%%%%%%%%%%%%%%
+ 
+  %remove the channel effect
+data_compensate= data_AfterChannel ./ h_QPSK;
+
+ % removing cyclic extension
+ length_1=length(data_compensate);
+yk_hat_2= data_compensate((length_1/5)+1 : length_1);
+
+     % remove ifft
+yk_hat_2 = fft(yk_hat_2);
+
+% remove mapper
+    yk = yk_hat_2;
+
+    size_of_sig = length(yk);
+    bk_hat = zeros(1,size_of_sig*2);
+    l = 1;
+    for v = 1:size_of_sig %32
+        if real(yk(v)) <= 0 && imag(yk(v)) <= 0
+            bk_hat(l) = 0;
+            bk_hat(l+1) = 0;
+        elseif real(yk(v)) <= 0 && imag(yk(v)) >= 0
+            bk_hat(l) = 0;
+            bk_hat(l+1) = 1;
+        elseif real(yk(v)) >= 0 && imag(yk(v)) <= 0
+            bk_hat(l) = 1;
+            bk_hat(l+1) = 0;
+        elseif real(yk(v)) >= 0 && imag(yk(v)) >= 0
+            bk_hat(l) = 1;
+            bk_hat(l+1) = 1;
+        end
+        l = l + 2;
+    end
+    
+    % remove interlever
+ de_interleaver = Interleaver_Block(bk_hat,16,8);
+ 
+ %%%% remove padding 
+ de_interleaver_without_pading=de_interleaver(1:length(de_interleaver)-2);
+ length_3=length( de_interleaver_without_pading);
+ 
+ %%%%%%%%%%%% decoding %%%%%%%%%%%%%%%%%%
+ Decoded_data = zeros(1, length(de_interleaver_without_pading) / 3);
+
+for i = 1:3:length(de_interleaver_without_pading)
+    segment = de_interleaver_without_pading(i:i+2);
+    Decoded_data((i+2)/3) = mode(segment); % Taking the majority vote
+end
+temp=[temp Decoded_data];
+ end
+  Decoded_data=temp;
+  
+  %%%%%%%%%%%%%%% End of receiver %%%%%%%%%%%%%%%%%%%%%5
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%BER calculate %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+ error = sum(my_data(1:length(Decoded_data)) ~= Decoded_data);
+BER_ofdm_qpsk_no_code_fadding_more_symbol(n) = error / length(Decoded_data);
+    end 
+    
+    
+    semilogy(MINIMUM_SNR:MAXIMAUM_SNR,BER_ofdm_qpsk_no_code_fadding_more_symbol);
+
+ % interleaver function
+
+
+function [interleaver_Data] =Interleaver_Block(Data,rows,coloumns)
+ interleaver_Data = [];
+ Intrlv_Size = rows * coloumns;
+ No_of_bits = length(Data);
+ for i = 1:No_of_bits/Intrlv_Size
+ interleaver_Data =horzcat(interleaver_Data,matintrlv(Data((i-1)*Intrlv_Size+1:i*Intrlv_Size),rows,coloumns));
+ end
+end
+
+
+function [unCoded_Data] =De_Coding_Block(Data,no_of_repetition,Interlever_size)
+ unPadd_Data = [];
+ Length_of_Data = length(Data);
+ Divided_Part_of_Data = floor(Interlever_size/no_of_repetition)*no_of_repetition;
+ No_of_zeros = Interlever_size - Divided_Part_of_Data;
+ for i = 1:Interlever_size:Length_of_Data
+ unPadd_Data =horzcat(unPadd_Data,Data(i:i+Interlever_size-No_of_zeros-1));
+ end
+ No_of_bits =length(unPadd_Data)/no_of_repetition;
+ unPadd_Data =reshape(unPadd_Data,[no_of_repetition No_of_bits]);
+ unCoded_Data = zeros(1,No_of_bits);
+ for i = 1:no_of_repetition
+ unCoded_Data =unCoded_Data+unPadd_Data(i,:);
+ end
+ unCoded_Data = (unCoded_Data > 1);
+end
+
+
+
+
+
+  
+
+
+        
+
+
+%ADDING channel effect and AWGN NOISE TO SIGNAL
+function [ADDING_H_AND_AWGN_VAL, h] = ADDING_H_AND_AWGN(signal, variance_val_n, mean_val_n, variance_val_h, mean_val_h)
+    h_r = mean_val_h + (variance_val_h) * randn(1, length(signal));
+    h_i = mean_val_h + (variance_val_h) * randn(1, length(signal));
+    h = h_r + h_i * 1i;
+    noise_real = (variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n;
+    noise_img = ((variance_val_n / 2) .* randn(1, length(signal)) + mean_val_n) * 1i;
+    ADDING_H_AND_AWGN_VAL = h .* signal + (noise_real + noise_img);
+end
+
